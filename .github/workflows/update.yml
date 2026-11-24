@@ -1,0 +1,29 @@
+name: Обновить расписание
+
+on:
+  schedule:
+    - cron: "7 * * * *"   # каждый час (GitHub может запускать с задержкой до ~15 мин)
+  workflow_dispatch:       # кнопка «Run workflow» для ручного запуска
+
+permissions:
+  contents: write
+
+concurrency:
+  group: update
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: node update.mjs
+      - name: Сохранить изменения
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data.json meta.json
+          git diff --cached --quiet || (git commit -m "Обновление расписания" && git push)
