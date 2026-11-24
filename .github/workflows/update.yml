@@ -1,13 +1,20 @@
 name: Обновить расписание
 
+# Как это работает:
+#  - одно звено работает ~5,5 часа и обновляет данные каждые 30 минут;
+#  - в конце звено само запускает следующее (workflow_dispatch), поэтому цепочка
+#    не зависит от расписания GitHub, которое может опаздывать или пропускать запуски;
+#  - расписание ниже — запасной вариант: если цепочка прервётся, оно её перезапустит;
+#  - concurrency не даёт работать двум звеньям одновременно.
 on:
   schedule:
-    - cron: "23 * * * *"  # в :23 каждого часа
-    - cron: "53 * * * *"  # и в :53 — запас, если GitHub пропустит запуск
-  workflow_dispatch:       # кнопка «Run workflow» для ручного запуска
+    - cron: "23 * * * *"
+    - cron: "53 * * * *"
+  workflow_dispatch:
 
 permissions:
   contents: write
+  actions: write
 
 concurrency:
   group: update
@@ -16,15 +23,31 @@ concurrency:
 jobs:
   update:
     runs-on: ubuntu-latest
+    timeout-minutes: 360
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-      - run: node update.mjs
-      - name: Сохранить изменения
+
+      - name: Обновлять каждые 30 минут
+        timeout-minutes: 340
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add data.json meta.json
-          git diff --cached --quiet || (git commit -m "Обновление расписания" && git push)
+          for i in $(seq 1 11); do
+            echo "=== Проверка $i: $(TZ=Europe/Moscow date '+%d.%m %H:%M') МСК ==="
+            git pull -q --rebase || true
+            node update.mjs || true
+            git add data.json meta.json
+            if ! git diff --cached --quiet; then
+              git commit -q -m "Обновление расписания" && (git push -q || (git pull -q --rebase && git push -q)) || echo "не удалось сохранить, попробую в следующий раз"
+            fi
+            if [ "$i" -lt 11 ]; then sleep 1800; fi
+          done
+
+      - name: Запустить следующее звено
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run update.yml --repo "${{ github.repository }}" --ref main
